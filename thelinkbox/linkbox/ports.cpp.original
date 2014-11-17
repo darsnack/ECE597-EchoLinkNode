@@ -19,12 +19,28 @@
    http://CQiNet.sourceforge.net
 
    $Log: ports.cpp,v $
-   Revision 1.29  2013/05/13 16:41:06  beta2k
-   Added patches from Kristoff - ON1ARF for sysfs GPIO access for PTT
+
+	// 2013/11/14 ON1ARF
+	Add support for PortAudio
+
+	// 2013/11/11 ON1ARF
+	Replaced AudioDeviceIsFifo by AudioDeviceType
+	Add AudioDevice2: 2nd AudioDevice (output for FIFO in/out)
+	Add AudioOutMuted
+	Small corrections on PTT/GPIO
+	
+   // 2013/10/20 ON1ARF
+   Added option VoxThresholdKickin: A "kick-in" value to increase the VoxThreshold
+		at the beginning of a stream
+
+	// 2013/10/10 ON1ARF
+	Added option "AudiodeviceIsFifo": read-only audio device, reads raw stream
+		from file (or FIFO-device), no DSP_SND commands
 
    Revision 1.28  2012/12/09 16:33:31  wb6ymh
    Delete parallel port object if OpenParallelPort fails.  Prevents later
    attempt to unkey transmitter via unopended parallel port.
+
 
    Revision 1.27  2010/11/20 15:16:00  wb6ymh
    1. Added support for the G.726 codec.
@@ -281,6 +297,28 @@
 
 #include "nodes.h"
 #include "devices.h"
+
+// ON1ARF
+// Set these setting before loading ports.h
+#ifdef __PORTAUDIO__
+
+	// _NEEDPORTAUDIO__ used in ports.h to include
+	// 				portaudio related stuctures
+	#define __NEEDPORTAUDIO__
+
+	#include <portaudio.h>
+
+	#define PA_NUMBUFF 16
+	#define PA_MINBUFF 3 // we need at least 3 buffer in the output queueu
+								// before we start playback
+
+	#define PA_BUFFERSAMPL48  960 // buffersize of 20 ms = 960 samples @ 48000 samples / sec
+	#define PA_BUFFERSAMPL8 160 // buffersize of 20 ms = 160 samples @ 8000 samples / sec
+
+	#define FOREVER 1
+
+#endif
+
 #include "ports.h"
 #include "bitstream.h"
 #include "g726.h"
@@ -349,6 +387,8 @@
 #define TLOG(x) if(Debug & DLOG_TBURST) LogErr x
 #define PTTLOG(x) if(Debug & DLOG_PTT) LogErr x
 
+
+
 int WriteWaits = 0;
 
 FILE *fp = NULL;
@@ -402,8 +442,6 @@ CPort::CPort()
    VoxHoldTime = 0;
    VoxTripDelay = 0;
    TxKeyMethod = 0;
-// ON1ARF
-	GpioSysClassId = -1;
    RxCosMethod = 0;
    SerialBaudRate = 2400;
    DTMFPollTime = 50;
@@ -520,7 +558,31 @@ CPort::CPort()
 #endif
 
 // ON1ARF
+
+	// init non-mandatory data
+	gpiosc_init=0;
 	gpiosc_fd=-1;
+	AudioDeviceType = 1; // OSS
+	VoxThresholdKickin = 1;
+	GpioSysClassId = -1;
+	AudioDevice2 = NULL;
+	AudioOutMuted = 0; // not muted
+
+	// some other vars
+#ifdef __PORTAUDIODEBUG__
+	// should be done during AudioInit, but do it here too, just to be sure
+	pa_active=0;
+	pa.i_ringbuffer_c=-1;
+	pa.o_ringbuffer_c=-1;
+	o_tmpbuffer_c=-1;
+	o_tmpbuffer=NULL;
+	o_framesize=0;
+
+	i_tmpbuffer_c=-1; // -1: no data in tmpbuffer and next frame not yet retrieved
+	i_framesize=0;
+#endif
+
+
 };
 
 CPort::~CPort()
@@ -552,13 +614,408 @@ CPort::~CPort()
    UsbShutdown();
 #endif
 
-	if (gpiosc_fd >= 0) {
-		close(gpiosc_fd);
+#ifdef __PORTAUDIODEBUG__
+	// stop portaudio if active
+	if (pa_active) {
+		Pa_Terminate();
+		pa_active=0;
 	}; // end if
+#endif
+
 }
+
+// ON1ARF
+#ifdef __PORTAUDIODEBUG__
+
+// callback function for portaudio
+static int funct_pacallback( const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer,
+                const PaStreamCallbackTimeInfo* timeInfo, PaStreamCallbackFlags statusFlags, void *datain ) {
+
+
+// data defintion
+// common data
+struct pashared_str *pashared;
+
+// local data
+int loopcount;
+int numBytes;
+int nextframe;
+
+pashared=(struct pashared_str*) datain;
+
+
+// PLAYBACK chain
+
+// is playback enabled?
+if (pashared->o_ringbuffer_c != -1) {
+	// yep!
+
+
+	// state 0: wating for sufficient data in queue to start playback (at least 3 samples)
+	// state 1: playback
+
+	// size of frame in octets
+	if (pashared->o_numchannel == 2) {
+		numBytes = framesPerBuffer << 2; // stereo, 2 * 16 bits/sample
+	} else {
+		numBytes = framesPerBuffer << 1; // mono, 16 bits/sample
+	}; // end else - if
+
+	// loop until break out
+	loopcount=0;
+	for (;;) {
+
+		// emergency breakout
+		loopcount++;
+		if (loopcount > 10) {
+			LOG_WARN(("%s: Error: emergency breakout playback chain in callback function! \n",__FUNCTION__));
+			break;
+		}; // end if
+
+
+
+		// state 0
+		if (pashared->p_state == 0) {
+			int frames;
+
+			// if there sufficiant data in queue?
+			frames=pashared->o_ringbuffer_p - pashared->o_ringbuffer_c;
+			if (frames < 0) {
+				// wrapped around
+				frames += PA_NUMBUFF;
+			}; // end if 
+
+			if (frames >= PA_MINBUFF) {
+				// change state and start again
+				pashared->p_state=1;
+				continue;
+			} else {
+				// nothing to send, send silence
+				memset(outputBuffer,0,numBytes);
+
+				// done, break out of endless loop
+				break;
+			}; // end else - if
+
+		} else if (pashared->p_state == 1) {
+			// state 1: in playback mode
+
+			nextframe = pashared->o_ringbuffer_c + 1;
+			if (nextframe >= PA_NUMBUFF) {
+				// wrapped around
+				nextframe=0;
+			}; // end if
+
+			// is there audio to send?
+			if (nextframe != pashared->o_ringbuffer_p) {
+				// yep
+				memcpy(outputBuffer,pashared->o_ringbuffer[nextframe],numBytes);
+
+				pashared->o_ringbuffer_c=nextframe;
+				// done, break out of loop
+				break;
+			} else {
+				// queue is empry
+				pashared->p_state=0;
+				continue; // repeap in loop
+			}; // end else - if
+
+		} else {
+			// unknown playback state, reinit
+			pashared->p_state=0;
+
+			// change of state stay in loop
+			continue;
+		}; // else else - elsif - if (state)
+
+	}; // end foreach (endless loop)
+
+}; // end if (playback enabled)
+
+
+// CAPTURE CHAIN
+// is playback enabled?
+if (pashared->i_ringbuffer_c != -1) {
+
+	// yep
+	if (pashared->i_numchannel == 2) {
+		numBytes = framesPerBuffer << 2; // stereo: 2 * 16 bit/sample
+	} else {
+		numBytes = framesPerBuffer << 1; // 16 bits / sample
+	}; // end else - if
+
+	// is there place to store the data?
+	nextframe = pashared->i_ringbuffer_p + 1;
+	if (nextframe >= PA_NUMBUFF) {
+		// wrapped around
+		nextframe=0;
+	}; // end if
+
+	if (nextframe != pashared->i_ringbuffer_c) {
+		// yep
+		memcpy(pashared->i_ringbuffer[nextframe],inputBuffer,numBytes);
+
+		pashared->i_ringbuffer_p = nextframe;
+
+		pashared->c_bufferfull=0;
+		// clear "queue full" flag
+	} else {
+		// set "queue full" flag
+ 		pashared->c_bufferfull=1;
+	}; // end if
+
+}; // end if (capture enabled)
+
+
+// DONE
+return paContinue;
+
+};  // end function funct_pacallback
+
+
+
+// function PORTAUDIO GET AUDIO
+int CPort::pa_getaudio (char * AudioBuffer, int BytesToRead) {
+
+int BytesToCopy;
+char * AudioBuffer_p;
+
+int totalgot;
+
+
+// note:
+// "i_tmpbuffer" (tempory buffer) is actually "active" frame from input queue
+
+// some sanity checks
+if (i_framesize < 0) {
+	return(-1);
+}; // end if
+
+if ((i_tmpbuffer_c < -1) || (i_tmpbuffer_c > i_framesize)) {
+	i_tmpbuffer_c=-1; // -1: no data in tmpbuffer and next frame not yet retrieved
+}; // end if
+
+// valid BytesToRead?
+if (BytesToRead < 0) {
+	return(0);
+}; // end if
+
+// odd number of bytes requested
+if (BytesToRead & 0x01) {
+	return(-2);
+}; // end if
+
+// init vars
+BytesToCopy=BytesToRead;
+AudioBuffer_p = AudioBuffer;
+
+
+totalgot=0;
+
+// endless loop until all audio read or no more audio in ringbuffer
+while (FOREVER) {
+int nextframe;
+
+	// senario 1: still data remaining in current queue
+	if (i_tmpbuffer_c >= 0) {
+		int toget;
+
+		if ((i_framesize - i_tmpbuffer_c) > BytesToCopy) {
+			toget=BytesToCopy;
+		} else {
+			toget=i_framesize - i_tmpbuffer_c;
+		}; // end else - if
+
+		// copy data from currently processing frame
+		memcpy(AudioBuffer,pa.i_ringbuffer[pa.i_ringbuffer_c],toget);
+
+		BytesToCopy -= toget;
+
+		totalgot += toget;
+		i_tmpbuffer_c += toget;
+
+		if (i_tmpbuffer_c >= i_framesize) {
+			i_tmpbuffer_c=-1; // -1: no data in tmpbuffer and next frame not yet retrieved
+		}; // 
+
+		// Stop here if we have all the data we need
+		if (BytesToCopy == 0) {
+			// yep. break out of loop
+			break;
+		}; // end if
+	
+		// nope, we still need more data
+
+		// move up pointer
+		AudioBuffer_p += toget;
+	}; // end if (still data in current blok)
+
+
+	// try fetching another block from the input queue
+
+	nextframe=pa.i_ringbuffer_c +1;
+
+	if (nextframe >= PA_NUMBUFF) {
+		nextframe=0;
+	}; // end if
+
+	// can we retrieve more data?
+	if (nextframe == pa.i_ringbuffer_p) {
+		// nope. queue is empty .. break out and stop
+	}; // end if
+
+	// yes, we can fetch next data
+	pa.i_ringbuffer_c=nextframe;
+
+	// set pointer in tempbuffer to start of frame
+	i_tmpbuffer_c=0;
+
+}; // end while (endless loop)
+
+// we should have got here only after a "break"
+
+// done, return number of bytes retrieved
+return(totalgot);
+}; // end function PA GET AUDIO
+
+
+// function PortAudio QUEUE AUDIO
+int CPort::pa_queueaudio (char * AudioBuffer, int BytesToSend) {
+// local data
+int firstrun;
+int nextframe;
+int ret=0;
+
+// some sanity checks
+
+// is there a tempory buffer?
+if ((o_tmpbuffer_c == -1) || (!o_tmpbuffer)) {
+	return(-1);
+}; // end if
+
+// size of datachunk can be up to "framesize" size
+if (BytesToSend > o_framesize) {
+	return(-2);
+}; // end if
+
+// bytcounter can be up to twice size of buffer
+if (o_tmpbuffer_c > (o_framesize << 1)) {
+	// reinit
+	o_tmpbuffer_c =0;
+}; // end if
+
+
+firstrun=1;
+// fake enless loop, allows use of "break" and "continue"
+while (FOREVER) {
+	// try to store audio if possible
+	if (o_tmpbuffer_c >= o_framesize) {
+		nextframe = pa.o_ringbuffer_p+1;
+		if (nextframe > PA_NUMBUFF) {
+			nextframe=0;
+		}; // end if
+
+		// can we store data?
+		if (nextframe != pa.o_ringbuffer_c) {
+			// store lower part of o_tmpbuffer
+			memcpy(pa.o_ringbuffer[nextframe],o_tmpbuffer,o_framesize);
+			pa.o_ringbuffer_p = nextframe;
+			
+			// move down pointer
+			o_tmpbuffer_c -= o_framesize;
+
+			// copy down any remaining data that could be in buffer
+			if (o_tmpbuffer_c > 0) {
+				memcpy(o_tmpbuffer,&o_tmpbuffer[o_framesize],o_tmpbuffer_c);
+			}; // end if
+
+		} else {
+			// no place in ringbuffer, break out if not firstrun
+			if (!firstrun) {
+				break;
+			}; // end if
+		}; // end if
+	}; // end if
+
+	// not "firstrun" anymore
+	firstrun=0;
+
+
+	// special case: no data in tempory buffer and audio-queue is same as framesize. Try to store immediatly
+	if ((o_tmpbuffer_c == 0) && (BytesToSend == o_framesize)) {
+		// try to store audio
+		nextframe = pa.o_ringbuffer_p+1;
+		if (nextframe > PA_NUMBUFF) {
+			nextframe=0;
+		}; // end if
+
+		// can we store it?
+		if (nextframe != pa.o_ringbuffer_c) {
+			// yes
+			memcpy(pa.o_ringbuffer[nextframe],AudioBuffer,o_framesize);
+			pa.o_ringbuffer_p = nextframe;
+
+			// success, break out!
+			ret=BytesToSend;
+			break;
+		}; // end if
+	}; // special case
+	
+
+	// queue data to tempory buffer
+	// is there sufficiant place?
+	if ((BytesToSend + o_tmpbuffer_c) > (o_framesize << 1)) {
+		// nope. Break out
+		ret=0;
+		break;
+	}; // end if
+
+	// yes. copy data in tempory buffer
+	memcpy(&o_tmpbuffer[o_tmpbuffer_c],AudioBuffer,BytesToSend);
+	o_tmpbuffer_c += BytesToSend;
+
+	// stay in loop, but already set return-value
+	ret=BytesToSend;
+	continue;
+
+}; // end 
+
+
+// Done, return
+return(ret);
+}; // end function queue_audio
+
+// end PORTAUDIO - ON1ARF
+#endif
+
+
 
 void CPort::KeyTx(int bKey)
 {
+
+	// ON1ARF
+
+	if (!gpiosc_init) {
+		// initialisation code. Called first time KeyTx is run
+		gpiosc_init=1;
+
+		if (TxKeyMethod == 7) {
+
+			// open file for GPIO
+			snprintf(gpiosc_fname,40,"/sys/class/gpio/gpio%d/value",GpioSysClassId);
+
+			gpiosc_fd = open (gpiosc_fname, O_WRONLY | O_NDELAY, 0);
+
+			if (gpiosc_fd < 0) {
+				fprintf(stderr,"Error: cannot open GPIO device %s for writing: %d (%s)!\n",gpiosc_fname, errno, strerror(errno));
+				exit(-1);
+			}; // end if
+
+		}; // end if (TxKeyMethod 7)
+		
+
+	}; // end init code
+
    bTxKeyed = bKey;
 
    if(Debug & DLOG_VOIP_AUDIO) {
@@ -608,29 +1065,14 @@ void CPort::KeyTx(int bKey)
 #ifdef USB_SUPPORT
          UsbKeyRadio(bKey);
 #endif
-         break;
+			break;
 
-		case 7: // GPIO /sys/class/gpio/... method
+		case 7:	// GPIO /sys/class/gpio method 
 					// ON1ARF
-
-			// try opening file to /sys/class/... if not yet done
-			if (gpiosc_fd < 0) {
-				snprintf(gpiosc_fname,40,"/sys/class/gpio/gpio%d/value",GpioSysClassId);
-
-				gpiosc_fd = open (gpiosc_fname, O_WRONLY | O_NDELAY, 0);
-
-				if (gpiosc_fd < 0) {
-					LOG_ERROR(("%s: cannot open GPIO device %s for writing: %d (%s): %s",__FUNCTION__, gpiosc_fname, errno, strerror(errno)));
-				}; // end if
-				
-			}; // end if
-
-			// write to gpio device if possible
-			if (gpiosc_fd >= 0) {
-				int ret;
-
-				const char on = '1';
-				const char off = '0';
+			{
+			int ret;
+			char on = '1';
+			char off = '0';
 
 				if((bKey && !InvertPTT) || (!bKey && InvertPTT)) {
 					// turn ON
@@ -641,18 +1083,16 @@ void CPort::KeyTx(int bKey)
 					lseek(gpiosc_fd,0,SEEK_SET);
 					ret=write(gpiosc_fd,&off,1);
 				}; // end else - if
-                        
-				if (!ret) {
+			
+				if (ret==0) {
+					// no data write
+					LOG_ERROR(("%s: Error PTT_GPIO: no data writen to GPIO device %s!\n",__FUNCTION__,gpiosc_fname));
+				} else if (ret < 0) {
 					// something went wrong
-					LOG_ERROR(("%s: Error write to GPIO file %s failed. Reason %d (%s)",__FUNCTION__, gpiosc_fname, errno, strerror(errno)));
+					LOG_ERROR(("%s: Error PTT_GPIO: write to GPIO device %s failed. Reason %d (%s)! \n",__FUNCTION__,gpiosc_fname,errno,strerror(errno)));
 				}; // end if
-
-
-				
-			}; 
-
-
-			break;
+			}; // end if
+         break;
    }
 }
 
@@ -846,28 +1286,71 @@ int CPort::WriteAudioOut(ClientInfo *p)
 
    for( ;  ;) {
       SamplesAvailable = 0;
-      if(ioctl(p->Socket,SNDCTL_DSP_GETOSPACE,&BufInfo) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_GETOSPACE failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         break;
-      }
-      D3PRINTF(("BufInfo1: bytes: %d, fragments: %d, fragsize: %d\n",
+		// ON1ARF
+		if (AudioDeviceType == 1) {
+		// OSS, get fragsize from OSS calls
+	      if(ioctl(p->Socket,SNDCTL_DSP_GETOSPACE,&BufInfo) == -1) {
+	         LOG_ERROR(("%s: SNDCTL_DSP_GETOSPACE failed: %s",__FUNCTION__,
+	                    Err2String(errno)));
+	         break;
+ 	     }
+	      D3PRINTF(("BufInfo: bytes: %d, fragments: %d, fragsize: %d\n",
                 BufInfo.bytes,BufInfo.fragments,BufInfo.fragsize));
 
-      if(BufInfo.fragments == 0) {
-         D3PRINTF(("BufInfo: bytes: %d, fragments: %d, fragsize: %d, bailing\n",
+			if(BufInfo.fragments == 0) {
+ 	        D3PRINTF(("BufInfo: bytes: %d, fragments: %d, fragsize: %d, bailing\n",
                    BufInfo.bytes,BufInfo.fragments,BufInfo.fragsize));
-         p->bWriteWait = FALSE;
-         break;
-      }
-      SamplesNeeded = BufInfo.fragsize / sizeof(int16);
+				p->bWriteWait = FALSE;
+				break;
+      	}
 
-      if(AudioChannel != 0) {
-         SamplesNeeded /= 2;
-      }
-      else if(bConvertSampleRate) {
-         SamplesNeeded /= 6;
-      }
+	      SamplesNeeded = BufInfo.fragsize / sizeof(int16);
+
+		} else if (AudioDeviceType == 2) {
+			// FIFO
+
+			// fixed number of samples: 20 ms
+			if (PCMRate == 8000) {
+				SamplesNeeded=160;
+			} else {
+				// 48000 samples / sec
+				SamplesNeeded=960;
+			}; // end if
+
+
+#ifdef __PORTAUDIODEBUG__
+		} else if (AudioDeviceType == 4) {
+			// PORTAUDIO
+
+			// fixed number of samples: 20 ms (
+			if (PCMRate == 8000) {
+         	SamplesNeeded = PA_BUFFERSAMPL8;
+			} else {
+				// 48000 samples / sec
+         	SamplesNeeded = PA_BUFFERSAMPL48;
+			}; // end else - if
+#endif
+
+
+
+		} else {
+			// unknown Audio Device Type
+ 	      D3PRINTF(("WriteAudioOut: Unknown Audio Device Type: %d bailing out.\n",AudioDeviceType));
+
+			p->bWriteWait = FALSE;
+			break;
+			//
+		};  // end else - elsif - elsif - if
+
+		// correct for stereo and/or SampleConversion
+ 	     if(AudioChannel != 0) {
+				SamplesNeeded /= 2;
+			}; // end if
+
+			if(bConvertSampleRate) {
+         	SamplesNeeded /= 6;
+      	}; // end if
+
 
    // Limit request to the minimum amount of "live" audio that's available
    // if any "live" audio is available
@@ -918,43 +1401,48 @@ int CPort::WriteAudioOut(ClientInfo *p)
       D3PRINTF(("BufInfo: bytes: %d, fragments: %d, fragsize: %d\n",BufInfo.bytes,
              BufInfo.fragments,BufInfo.fragsize));
 #endif
-      if(AudioChannel != 0) {
-      // pack data from the two mono buffers into the stereo buffer
-         int16 *pRight;
-         int16 *pLeft;
-         int16 *pOut = StereoOutBuf;
 
-         if(AudioChannel == 1) {
-         // Master channel is right channel
-            pRight = MasterSamples > 0 ? MasterBuf : SilenceBuf;
-            if(pAudioSlave == NULL || SlaveSamples == 0) {
-               pLeft = SilenceBuf;
-            }
-            else {
-               pLeft = SlaveBuf;
-            }
-         }
-         else {
-         // Master channel is left channel
-            pLeft = MasterSamples > 0 ? MasterBuf : SilenceBuf;
-            if(pAudioSlave == NULL || SlaveSamples == 0) {
-               pRight = SilenceBuf;
-            }
-            else {
-               pRight = SlaveBuf;
-            }
-         }
+		// ON1ARF
+		// actions not needed when muted
+		if (!AudioOutMuted) {
+	      if(AudioChannel != 0) {
+		      // pack data from the two mono buffers into the stereo buffer
+	         int16 *pRight;
+	         int16 *pLeft;
+	         int16 *pOut = StereoOutBuf;
 
-         for(int i = 0; i < SamplesAvailable; i++) {
-            *pOut++ = *pLeft++;
-            *pOut++ = *pRight++;
-         }
-      }
+	         if(AudioChannel == 1) {
+	         // Master channel is right channel
+	            pRight = MasterSamples > 0 ? MasterBuf : SilenceBuf;
+	            if(pAudioSlave == NULL || SlaveSamples == 0) {
+	               pLeft = SilenceBuf;
+	            }
+	            else {
+	               pLeft = SlaveBuf;
+	            }
+	         }
+	         else {
+	         // Master channel is left channel
+	            pLeft = MasterSamples > 0 ? MasterBuf : SilenceBuf;
+	            if(pAudioSlave == NULL || SlaveSamples == 0) {
+	               pRight = SilenceBuf;
+	            }
+	            else {
+	               pRight = SlaveBuf;
+	            }
+ 	        }
 
-      if(bConvertSampleRate) {
-      // Upconvert from 8Khz to 48Khz sampling rate
-         UpConvert(SamplesAvailable);
-      }
+	         for(int i = 0; i < SamplesAvailable; i++) {
+	            *pOut++ = *pLeft++;
+	            *pOut++ = *pRight++;
+	         }
+	      }
+
+	      if(bConvertSampleRate) {
+	      // Upconvert from 8Khz to 48Khz sampling rate
+	         UpConvert(SamplesAvailable);
+	      }
+		}; // end if (not muted)
 
       if(TimeLapse(&LastStereoOutTime) >= 0) {
       // Sound card buffer is empty
@@ -1047,10 +1535,38 @@ int CPort::WriteAudioOut(ClientInfo *p)
          int Bytes2Write;
 
          Bytes2Write = min(BufInfo.fragsize,WriteSize);
-         wrote = write(p->Socket,pWriteData,Bytes2Write);
 
-         D3PRINTF(("Wr: requested %d, wrote %d/%d, pid: %d\n",Bytes2Write,wrote,
-                BufInfo.bytes,(int) getpid()));
+			// ON1ARF
+
+			//init vars
+			wrote=0;
+
+			if (!AudioOutMuted) {
+				if (AudioDeviceType == 1) {
+					// OSS: write to Socket
+		         wrote = write(p->Socket,pWriteData,Bytes2Write);
+				} else if (AudioDeviceType == 2) {
+					// FIFO: write to Socket2
+					// do additional check if Socket2 exists
+					if (p->Socket2) {
+			         wrote = write(p->Socket2,pWriteData,Bytes2Write);
+					}; // end if
+#ifdef __PORTAUDIODEBUG__
+				} else if (AudioDeviceType == 4) {
+//					wrote = pa_queueaudio(pWriteData,Bytes2Write);
+					wrote = 0;
+#endif
+				}; // end elseif - elseif  - if 
+
+	         D3PRINTF(("Wr: requested %d, wrote %d/%d, pid: %d, AudioDeviceType = %d\n",Bytes2Write,wrote,
+	               BufInfo.bytes,(int) getpid(),AudioDeviceType));
+			} else {
+				wrote = Bytes2Write;
+
+	         D3PRINTF(("DummyWr: requested %d, wrote %d/%d, pid: %d\n",Bytes2Write,wrote,
+	               BufInfo.bytes,(int) getpid()));
+
+			}; // end if
 
          if(wrote <= 0) {
             if(errno == EAGAIN) {
@@ -1126,12 +1642,18 @@ void CPort::Vox(int Samples)
    VoxSamples += Samples;
 
    if(VoxSamples >= 800) {
+	int thisVoxThreshold;
+	if (bRxActive) {
+		thisVoxThreshold=VoxThreshold;
+	} else {
+		thisVoxThreshold=VoxThreshold*VoxThresholdKickin;
+	}; // end if
+
    // average of 100 milliseconds or more
       VoxAveLevel = VoxAveTemp / VoxSamples;
       VoxSamples = VoxAveTemp = 0;
-      if(VoxAveLevel > VoxThreshold) {
+      if(VoxAveLevel > thisVoxThreshold) {
          LastVoxTrip = TimeNow;
-D2PRINTF(("V"));
          if(!bRxActive && (Debug & DLOG_COS_CTCSS)) {
             LOG_ERROR(("%s: AveLevel: %d/%d\n",__FUNCTION__,VoxAveLevel,
                        VoxThreshold));
@@ -1381,14 +1903,39 @@ void CPort::GetAudioIn(ClientInfo *p)
    u_int32 RingNdx;
 
    audio_buf_info BufInfo;
-   if(ioctl(p->Socket,SNDCTL_DSP_GETISPACE,&BufInfo) == -1) {
-      LOG_ERROR(("%s: SNDCTL_DSP_GETOSPACE failed: %s",__FUNCTION__,
-                 Err2String(errno)));
-   }
-   D3PRINTF(("%s: BufInfo: bytes: %d, fragments: %d/%d, fragsize: %d\n",__FUNCTION__,
-          BufInfo.bytes,
-          BufInfo.fragments,BufInfo.fragstotal,
-          BufInfo.fragsize));
+
+	// ON1ARF
+
+	// OSS
+	if (AudioDeviceType == 1) {
+	   if(ioctl(p->Socket,SNDCTL_DSP_GETISPACE,&BufInfo) == -1) {
+	      LOG_ERROR(("%s: SNDCTL_DSP_GETOSPACE failed: %s",__FUNCTION__, Err2String(errno)));
+	   }
+	   D3PRINTF(("%s: BufInfo: bytes: %d, fragments: %d/%d, fragsize: %d\n",__FUNCTION__,
+
+		BufInfo.bytes,
+		BufInfo.fragments,BufInfo.fragstotal,
+		BufInfo.fragsize));
+
+	} else if (AudioDeviceType == 2) {
+		// FIFO
+
+		// No minimal Audio Write size
+		MinAudioWrite=0;
+
+#ifdef __PORTAUDIODEBUG__
+	} else if (AudioDeviceType == 4) {
+		// PORTAUDIO
+
+		// No minimal Audio Write size
+		MinAudioWrite=0;
+#endif
+	} else {
+		// unknown Audio Device Type
+		D3PRINTF(("GetAudioIn: Unknown Audio Device Type: %d bailing out.\n",AudioDeviceType));
+		return;
+	}; // end if
+
 
    if(MinAudioWrite == -1) {
    // Assume the size of the first read in bytes is the MinAudioWrite
@@ -1430,7 +1977,19 @@ void CPort::GetAudioIn(ClientInfo *p)
             MaxRead = AUDIO_BUF_SIZE_BYTES;
          }
       }
-      Read = read(p->Socket,pWriteData,MaxRead);
+
+		// read data
+		if ((AudioDeviceType == 1) || (AudioDeviceType == 2)) {
+			// OSS or FIFO: read from file / FIFO
+	      Read = read(p->Socket,pWriteData,MaxRead);
+#ifdef __PORTAUDIODEBUG__
+		} else if (AudioDeviceType == 4) {
+			// PORTAUDIO
+
+//	      Read = pa_getaudio(pWriteData,MaxRead);
+	      Read = 0;
+#endif
+		}; // end (elsif) if
 
       if(Read > 0 && DebugFpRawAudioPB != NULL) {
          int DummyRead = fread(pWriteData,1,Read,DebugFpRawAudioPB);
@@ -1448,8 +2007,11 @@ void CPort::GetAudioIn(ClientInfo *p)
       }
 
       if(Read <= 0) {
-         if(Read < 0 && errno != EAGAIN) {
-            LOG_ERROR(("GetAudioIn(): read() failed: %s",Err2String(errno)));
+         if(Read < 0) {
+				// ignore EAGAIN error on OSS or FIFO
+				if ((errno != EAGAIN) || ((AudioDeviceType != 1) && (AudioDeviceType != 2))) {
+	            LOG_ERROR(("GetAudioIn(): read() failed: %s",Err2String(errno)));
+				}; // end if
          }
          p->bReadReady = FALSE;
          break;
@@ -2114,6 +2676,10 @@ void AudioCleanup(ClientInfo *p)
    pClass->AudioCleanup(p);
 }
 
+
+
+
+
 int CPort::AudioInit()
 {
    int Ret = 0;
@@ -2130,7 +2696,55 @@ int CPort::AudioInit()
    unsigned long x;
 #endif
 
+// ON1ARF
+#ifdef __PORTAUDIODEBUG__
+	// local vars
+	PaStream * pastream;
+	PaError pa_ret;
+	const PaDeviceInfo *devinfo;
+
+	// init some vars
+	pa_active=0;
+	pa.i_ringbuffer_c=-1;
+	pa.o_ringbuffer_c=-1;
+	o_tmpbuffer_c=-1;
+	
+#endif
+
+	// fake "do" -> allows use of "break"
    do {
+
+		// some error checks on AudioDeviceType
+		if ((AudioDeviceType < 1) || (AudioDeviceType > 4)) {
+			LOG_ERROR(("%s: Invalid configuration, Unknown DeviceType %d\n",__FUNCTION__,AudioDeviceType));
+			Ret = ERR_CONFIG_FILE;
+			break;
+		}; // end if
+
+		// AudioDeviceType (ALSA) not supported yet
+		if (AudioDeviceType == 3) {
+			LOG_ERROR(("%s: Invalid configuration, DeviceType ALSA not supported\n",__FUNCTION__));
+			Ret = ERR_CONFIG_FILE;
+			break;
+		}; // end if
+
+#ifndef __PORTAUDIO__
+		// Portaudio not supported if __PORTAUDIO__ not set
+		if (AudioDeviceType == 4) {
+			LOG_ERROR(("%s: Invalid configuration, DeviceType portaudio not supported\n",__FUNCTION__));
+			Ret = ERR_CONFIG_FILE;
+			break;
+		}; // end if
+
+#endif
+
+
+		// If DeviceType FIFO and no 2nd AudioDevicetype is defined, mute output audio
+		if ((AudioDeviceType == 2) && (AudioDevice2 == NULL) && (!AudioOutMuted)) {
+         LOG_ERROR(("%s: No AudioDevice2 defined for FIFO, AudioOutMuted set to 0 (FALSE)%d\n",__FUNCTION__));
+			AudioOutMuted=1;
+		}; // end if
+
       if((RxRing = (int16 *) malloc(RxRingSize*sizeof(int16))) == NULL) {
          LOG_ERROR(("%s#%d: malloc failed\n",__FUNCTION__,__LINE__));
          Ret = ERR_MALLOC;
@@ -2224,143 +2838,593 @@ int CPort::AudioInit()
 
       LOG_ERROR(("%s#%d: opening \"%s\"\n",__FUNCTION__,__LINE__,AudioDevice));
 
-      if((pAudioC->Socket = open(AudioDevice,AUDIO_OPEN_FLAGS)) < 0) {
-         LOG_ERROR(("%s#%d: open(\"%s\") failed: %s",__FUNCTION__,__LINE__,AudioDevice,
-                   Err2String(errno)));
-         Ret = ERR_AUDIO_DEV_OPEN;
-         break;
-      }
 
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETDUPLEX,NULL) == -1) {
-      // Failure is not necessarily fatal.
-      // FreeBSD doesn't require this call for fullduplex
-         LOG_WARN(("%s: SNDCTL_DSP_SETDUPLEX failed: %s",__FUNCTION__,
-                   Err2String(errno)));
-      }
+		// ON1ARF
+		// OSS or FIFO: open audio-device via "open"
 
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_GETFMTS,&bits) == -1) {
-         LOG_WARN(("%s: SNDCTL_DSP_GETFMTS failed: %s",__FUNCTION__,
-                   Err2String(errno)));
-      }
-      else if(!(bits & AFMT_S16_LE)) {
-         LOG_ERROR(("%s: Error AFMT_S16_LE not supported\n",__FUNCTION__));
-         Ret = ERR_AUDIO_FMT;
-         break;
-      }
+		if ((AudioDeviceType == 1) || (AudioDeviceType == 2)) {
+	      if((pAudioC->Socket = open(AudioDevice,AUDIO_OPEN_FLAGS)) < 0) {
+				LOG_ERROR(("%s#%d: open(\"%s\") failed: %s",__FUNCTION__,__LINE__,AudioDevice,
+						Err2String(errno)));
+				Ret = ERR_AUDIO_DEV_OPEN;
+				break;
 
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SAMPLESIZE,&SampleSize) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_SAMPLESIZE failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         Ret = ERR_AUDIO_FMT;
-         break;
-      }
+			}
 
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_STEREO,&Stereo) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_STEREO failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         Ret = ERR_AUDIO_FMT;
-         break;
-      }
+			if (!AudioDeviceType == 1) {
+			// OSS related configuration
 
-      SampleRate = PCMRate;
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SPEED,&SampleRate) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_SPEED failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         Ret = ERR_AUDIO_FMT;
-         break;
-      }
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETDUPLEX,NULL) == -1) {
+					// Failure is not necessarily fatal.
+					// FreeBSD doesn't require this call for fullduplex
+      	   	LOG_WARN(("%s: SNDCTL_DSP_SETDUPLEX failed: %s",__FUNCTION__,
+         	          Err2String(errno)));
+				}
 
-      LOG_WARN(("%s: Asked for a sampling rate of %d, got %d\n",__FUNCTION__,
-                PCMRate,SampleRate));
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_GETFMTS,&bits) == -1) {
+					LOG_WARN(("%s: SNDCTL_DSP_GETFMTS failed: %s",__FUNCTION__,
+  	                 Err2String(errno)));
+		      }
+				else if(!(bits & AFMT_S16_LE)) {
+					LOG_ERROR(("%s: Error AFMT_S16_LE not supported\n",__FUNCTION__));
+					Ret = ERR_AUDIO_FMT;
+					break;
+  		   	}
 
-      if(SampleRate != PCMRate && PCMRate != 48000) {
-         if(DisableRateConversion) {
-            LOG_ERROR(("%s: Couldn't set sampling rate and rate conversion "
-                       "is disabled\n",__FUNCTION__));
-            Ret = ERR_AUDIO_FMT;
-            break;
-         }
-      // Try 48k
-         SampleRate = PCMRate = 48000;
-         if(ioctl(pAudioC->Socket,SNDCTL_DSP_SPEED,&SampleRate) == -1) {
-            LOG_ERROR(("%s: SNDCTL_DSP_SPEED failed: %s",__FUNCTION__,
-                       Err2String(errno)));
-            Ret = ERR_AUDIO_FMT;
-            break;
-         }
-         LOG_WARN(("%s: Asked for a sampling rate of %d, got %d\n",
-                   __FUNCTION__,PCMRate,SampleRate));
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SAMPLESIZE,&SampleSize) == -1) {
+		         LOG_ERROR(("%s: SNDCTL_DSP_SAMPLESIZE failed: %s",__FUNCTION__,
+	                    Err2String(errno)));
+		         Ret = ERR_AUDIO_FMT;
+		         break;
+		      }
 
-         if(SampleRate != 48000) {
-            LOG_ERROR(("%s: Unable to find supported sampling rate\n",
-                       __FUNCTION__));
-            Ret = ERR_AUDIO_FMT;
-            break;
-         }
-      }
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_STEREO,&Stereo) == -1) {
+		         LOG_ERROR(("%s: SNDCTL_DSP_STEREO failed: %s",__FUNCTION__,
+		                    Err2String(errno)));
+		         Ret = ERR_AUDIO_FMT;
+		         break;
+		      }
 
-      if(PCMRate == 48000) {
-         bConvertSampleRate = TRUE;
-      // Allocate buffers for sampling rate conversion
-         if((AudioBuf48Khz = (int16 *) malloc(AUDIO_BUF_SIZE*12)) == NULL) {
-            LOG_ERROR(("%s#%d: malloc failed\n",__FUNCTION__,__LINE__));
-            Ret = ERR_MALLOC;
-            break;
-         }
+		      SampleRate = PCMRate;
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SPEED,&SampleRate) == -1) {
+		         LOG_ERROR(("%s: SNDCTL_DSP_SPEED failed: %s",__FUNCTION__,
+		                    Err2String(errno)));
+		         Ret = ERR_AUDIO_FMT;
+		         break;
+		      }
 
-         if((AudioInBuf48Khz = (int16 *) malloc(AUDIO_BUF_SIZE*12)) == NULL) {
-            LOG_ERROR(("%s#%d: malloc failed\n",__FUNCTION__,__LINE__));
-            Ret = ERR_MALLOC;
-            break;
-         }
-         LOG_ERROR(("%s: sampling rate conversion from %d to %d enabled\n",
-                    __FUNCTION__,PCMRate,8000));
-      }
+		      LOG_WARN(("%s: Asked for a sampling rate of %d, got %d\n",__FUNCTION__,
+	                PCMRate,SampleRate));
 
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETFMT,&Fmt) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_SETFMT failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         Ret = ERR_AUDIO_FMT;
-         break;
-      }
+		      if(SampleRate != PCMRate && PCMRate != 48000) {
+		         if(DisableRateConversion) {
+		            LOG_ERROR(("%s: Couldn't set sampling rate and rate conversion "
+	                       "is disabled\n",__FUNCTION__));
+		            Ret = ERR_AUDIO_FMT;
+		            break;
+		         }
+		      // Try 48k
+		         SampleRate = PCMRate = 48000;
+		         if(ioctl(pAudioC->Socket,SNDCTL_DSP_SPEED,&SampleRate) == -1) {
+		            LOG_ERROR(("%s: SNDCTL_DSP_SPEED failed: %s",__FUNCTION__,
+	                       Err2String(errno)));
+		            Ret = ERR_AUDIO_FMT;
+		            break;
+		         }
+		         LOG_WARN(("%s: Asked for a sampling rate of %d, got %d\n",
+	                   __FUNCTION__,PCMRate,SampleRate));
+
+		         if(SampleRate != 48000) {
+		            LOG_ERROR(("%s: Unable to find supported sampling rate\n",
+		                       __FUNCTION__));
+		            Ret = ERR_AUDIO_FMT;
+		            break;
+		         }
+		      }
+
+		      if(PCMRate == 48000) {
+		         bConvertSampleRate = TRUE;
+		      // Allocate buffers for sampling rate conversion
+		         if((AudioBuf48Khz = (int16 *) malloc(AUDIO_BUF_SIZE*12)) == NULL) {
+		            LOG_ERROR(("%s#%d: malloc failed\n",__FUNCTION__,__LINE__));
+		            Ret = ERR_MALLOC;
+		            break;
+		         }
+
+		         if((AudioInBuf48Khz = (int16 *) malloc(AUDIO_BUF_SIZE*12)) == NULL) {
+		            LOG_ERROR(("%s#%d: malloc failed\n",__FUNCTION__,__LINE__));
+		            Ret = ERR_MALLOC;
+		            break;
+		         }
+		         LOG_ERROR(("%s: sampling rate conversion from %d to %d enabled\n",
+		                    __FUNCTION__,PCMRate,8000));
+		      }
+
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETFMT,&Fmt) == -1) {
+		         LOG_ERROR(("%s: SNDCTL_DSP_SETFMT failed: %s",__FUNCTION__,
+		                    Err2String(errno)));
+		         Ret = ERR_AUDIO_FMT;
+		         break;
+		      }
+
 
 #ifndef SNDCTL_DSP_SETFRAGMENT
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETBLKSIZE,&BlkSz) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_SETBLKSIZE failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         Ret = ERR_AUDIO_FMT;
-         break;
-      }
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETBLKSIZE,&BlkSz) == -1) {
+		         LOG_ERROR(("%s: SNDCTL_DSP_SETBLKSIZE failed: %s",__FUNCTION__,
+		                    Err2String(errno)));
+		         Ret = ERR_AUDIO_FMT;
+		         break;
+		      }
 #else
-      x = frag_size;
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETFRAGMENT,&frag_size) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_SETFRAGMENT failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         Ret = ERR_AUDIO_SET_FRAG;
-         break;
-      }
-      if(frag_size != x) {
-         LOG_ERROR(("%s: requested frag_size 0x%x, got 0x%x\n",__FUNCTION__,
-                    x,frag_size));
-      }
+		      x = frag_size;
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_SETFRAGMENT,&frag_size) == -1) {
+		         LOG_ERROR(("%s: SNDCTL_DSP_SETFRAGMENT failed: %s",__FUNCTION__,
+		                    Err2String(errno)));
+		         Ret = ERR_AUDIO_SET_FRAG;
+		         break;
+		      }
+
+		      if(frag_size != x) {
+		         LOG_ERROR(("%s: requested frag_size 0x%x, got 0x%x\n",__FUNCTION__,
+		                    x,frag_size));
+		      }
 #endif
 
-      if(ioctl(pAudioC->Socket,SNDCTL_DSP_GETOSPACE,&BufInfo) == -1) {
-         LOG_ERROR(("%s: SNDCTL_DSP_GETOSPACE failed: %s",__FUNCTION__,
-                    Err2String(errno)));
-         if(DriverAudioOutDelay < 0) {
-            DriverAudioOutDelay = 80;
-         }
-      }
-      else {
-         LOG_ERROR(("Fragsize: %d, fragstotal: %d, bytes: %d\n",
-                    BufInfo.fragsize,BufInfo.fragstotal,BufInfo.bytes));
+		      if(ioctl(pAudioC->Socket,SNDCTL_DSP_GETOSPACE,&BufInfo) == -1) {
+		         LOG_ERROR(("%s: SNDCTL_DSP_GETOSPACE failed: %s",__FUNCTION__,
+		                    Err2String(errno)));
+		         if(DriverAudioOutDelay < 0) {
+		            DriverAudioOutDelay = 80;
+		         }
+		      }
+		      else {
+		         LOG_ERROR(("Fragsize: %d, fragstotal: %d, bytes: %d\n",
+		                    BufInfo.fragsize,BufInfo.fragstotal,BufInfo.bytes));
 
-         if(DriverAudioOutDelay < 0) {
-         // Calculate the delay in the sound device and driver in milliseconds
-            DriverAudioOutDelay = (BufInfo.bytes / 2) * 1000 / PCMRate;
-         }
-      }
+		         if(DriverAudioOutDelay < 0) {
+		         // Calculate the delay in the sound device and driver in milliseconds
+		            DriverAudioOutDelay = (BufInfo.bytes / 2) * 1000 / PCMRate;
+		         }
+  		    	}
+			} else {
+				// AudiodeviceTyep = FIFO, try opening output, 2nd socket
+
+				
+				if (AudioDevice2) {
+		   	   if((pAudioC->Socket2 = open(AudioDevice2,AUDIO_OPEN_FLAGS)) < 0) {
+						LOG_ERROR(("%s#%d: open(\"%s\") failed: %s",__FUNCTION__,__LINE__,AudioDevice2,
+							Err2String(errno)));
+						Ret = ERR_AUDIO_DEV_OPEN;
+
+						AudioOutMuted=1;
+
+						break;
+					} else {
+						// Opening works, enable output
+						AudioOutMuted=0;
+					}; // end else - if
+				} else {
+					// No AudioDevice2, mute output
+					AudioOutMuted=1;
+				}; // end if (AudioDevice2 exists)
+
+
+				// Set DriverAudioOutDelay (copy code from OSS output)
+
+				if(DriverAudioOutDelay < 0) {
+					DriverAudioOutDelay = 80;
+				}
+
+				// break out
+				break;
+			}; // end else - of
+			
+		} else if (AudioDeviceType == 4) {
+			// ON1ARF
+
+			// AudioDeviceType PORTAUDIO
+
+#ifdef __PORTAUDIODEBUG__
+fprintf(stderr,"INSIDE AUDIOINIT\n");
+			// local vars
+			int l,l2; //loop
+			int numdevice, devicefound, deviceid, maxnumchannel;
+			int numBytes;
+
+			// portaudio should be 8000 or 48000 bps
+			// (let's not make thing more complicated then needed)
+			if ((PCMRate != 8000) && (PCMRate != 48000)) {
+				LOG_ERROR(("%s: PortAudio failed: samplerate should be 8000 or 48000, got %d",__FUNCTION__,SampleRate));
+	        	Ret = ERR_CONFIG_FILE;
+				break;
+			}; // end if
+
+			
+
+			// open portaudio device
+			pa_ret=Pa_Initialize();
+
+			if (pa_ret != paNoError) {
+				Pa_Terminate();
+				LOG_ERROR(("%s: PortAudio Init failed: %d(%s)",__FUNCTION__,pa_ret,Pa_GetErrorText(pa_ret)));
+				Ret = ERR_AUDIO_DEV_OPEN;
+				break;
+			}; // end if
+
+			// set portaudio is active so it can be closed when destructing the object
+			pa_active=1;
+
+			// search for device
+			numdevice=Pa_GetDeviceCount();
+
+			devicefound=0;
+
+			for (l=0; ((l < numdevice) && (!devicefound)); l++) {
+				devinfo = Pa_GetDeviceInfo(l);
+
+				if (strlen(AudioDevice) == strlen(devinfo->name)) {
+					if (strncmp((char *) devinfo->name, AudioDevice, strlen(AudioDevice)) == 0) {
+						// we have a match!
+						devicefound=1;
+						deviceid=l;
+					}; // end if 
+				}; // end if
+			}; // end for
+
+
+			if (!devicefound) {
+				Pa_Terminate();
+				pa_active=0;
+				LOG_ERROR(("%s: PortAudio %s failed: device not found",__FUNCTION__,AudioDevice));
+				Ret = ERR_AUDIO_DEV_OPEN;
+				break;
+			}; // end if
+
+			maxnumchannel=devinfo->maxInputChannels;
+			if (maxnumchannel < 1) {
+				// no input
+				Pa_Terminate();
+				pa_active=0;
+				LOG_ERROR(("%s: PortAudio %s failed: input not supported",__FUNCTION__,AudioDevice));
+				Ret = ERR_AUDIO_DEV_OPEN;
+				break;
+			}; // end if
+
+
+			maxnumchannel=devinfo->maxOutputChannels;
+			if (maxnumchannel < 1) {
+				// no output.
+				// Not necessairy fatal. Disable output
+				LOG_WARN(("%s: PortAudio %s warning: output not supported. Disabling output",__FUNCTION__,AudioDevice));
+				AudioOutMuted=1;
+			}; // end if
+
+
+
+			// check if format is supported
+			inputParameters.device=deviceid;
+			inputParameters.sampleFormat=paInt16;
+			inputParameters.suggestedLatency=0; // not used. clear to be sure
+			inputParameters.hostApiSpecificStreamInfo=NULL; // no data
+
+			// first try mono input
+			// init var
+			pa.i_numchannel=0;
+
+			inputParameters.channelCount=1;
+			pa_ret = Pa_IsFormatSupported(&inputParameters, NULL, (double) SampleRate);
+			if (pa_ret == paFormatIsSupported) {
+				pa.i_numchannel=1;
+			} else {
+				// try again in stereo
+				inputParameters.channelCount=2;
+				pa_ret = Pa_IsFormatSupported(&inputParameters, NULL, (double) SampleRate);
+				if (pa_ret == paFormatIsSupported) {
+					pa.i_numchannel=2;
+				}; // end else - if
+			}; // end else - if
+			
+			
+			// no success (yet) 
+			if (!pa.i_numchannel) {
+				// local data
+				int SampleRateRequested;
+
+				if (SampleRate == 48000) {
+					// if not successfull at 48000 bps, stop here
+					Pa_Terminate();
+					pa_active=0;
+					LOG_ERROR(("%s: PortAudio %s failed: 48k not supported for input",__FUNCTION__,AudioDevice));
+					Ret = ERR_AUDIO_DEV_OPEN;
+					break;
+				}; // end if
+
+				if (DisableRateConversion) {
+					// not successfull at other bitrate but bitrate conversion disabled
+					Pa_Terminate();
+					pa_active=0;
+					LOG_ERROR(("%s: PortAudio %s failed: %d bps not supported for input and samplerate conversion disabled",__FUNCTION__,AudioDevice,SampleRate));
+					Ret = ERR_AUDIO_DEV_OPEN;
+				}; // end if
+
+
+				// try again at samplerate of 48000 bps
+				SampleRateRequested=SampleRate;
+				SampleRate = PCMRate = 48000;
+
+
+				inputParameters.channelCount=1;
+				pa_ret = Pa_IsFormatSupported(&inputParameters, NULL, (double) SampleRate);
+
+				if (pa_ret == paFormatIsSupported) {
+					LOG_WARN(("%s: PortAudio %s warning: input samplerate set from %d to 48000 bps",__FUNCTION__,AudioDevice,SampleRateRequested));
+					pa.i_numchannel=1;
+				} else {
+					// try again in stereo
+					inputParameters.channelCount=2;
+					pa_ret = Pa_IsFormatSupported(&inputParameters, NULL, (double) SampleRate);
+					if (pa_ret == paFormatIsSupported) {
+						LOG_WARN(("%s: PortAudio %s warning: input samplerate set from %d to 48000 bps",__FUNCTION__,AudioDevice,SampleRateRequested));
+						pa.i_numchannel=2;
+					}; // end else - if
+				}; // end else - if
+
+				if (!pa.i_numchannel) {
+					// if not successfull at 48000 bps neither
+					Pa_Terminate();
+					pa_active=0;
+					LOG_ERROR(("%s: PortAudio %s failed: nor %d bps, nor 48000 bps not supported for input",__FUNCTION__,AudioDevice,SampleRateRequested));
+					Ret = ERR_AUDIO_DEV_OPEN;
+					break;
+				}; // end if
+			
+			}; // end if (no success (yet) at original samplerate
+
+
+			// input successfull, now check output
+
+
+			// check if format is supported
+			outputParameters.device=deviceid;
+			outputParameters.sampleFormat=paInt16;
+			outputParameters.suggestedLatency=0; // not used. clear to be sure
+			outputParameters.hostApiSpecificStreamInfo=NULL; // no data
+
+			// first try stereo output (a lot device *say* they support mono output while
+			//						they do not, so let's start with stereo output)
+			// init var
+			pa.o_numchannel=0;
+
+			outputParameters.channelCount=2;
+			pa_ret = Pa_IsFormatSupported(NULL, &inputParameters, (double) SampleRate);
+			if (pa_ret == paFormatIsSupported) {
+				pa.o_numchannel=2;
+			} else {
+				// try again in mono
+				outputParameters.channelCount=1;
+				pa_ret = Pa_IsFormatSupported(NULL, &inputParameters, (double) SampleRate);
+				if (pa_ret == paFormatIsSupported) {
+					pa.o_numchannel=1;
+				}; // end if
+			}; // end if
+
+			if (!pa.o_numchannel) {
+				// if not successfull
+				LOG_WARN(("%s: PortAudio %s failed: %d bps not supported for output. Output Muted.",__FUNCTION__,AudioDevice,SampleRate));
+				AudioOutMuted=1;
+			}; // end if
+
+
+			// allocate memory for buffers ringbuffer between main application and portaudio callback function
+			// INPUT
+			if (SampleRate == 8000) {
+				// 20 ms @ 8000
+				numBytes = PA_BUFFERSAMPL8 * sizeof(int16_t);
+			} else {
+				// 20 ms @ 48000
+				numBytes = PA_BUFFERSAMPL48 * sizeof(int16_t);
+			}; // end else - if
+
+			// double size if stereo
+			if (inputParameters.channelCount == 2) {
+				numBytes = AUDIO_BUF_SIZE_BYTES << 1; // stereo
+			}; // end if
+
+			for (l=0; l < PA_NUMBUFF; l++) {
+				pa.i_ringbuffer[l]=(int16_t*)malloc(numBytes);
+
+				if (!pa.i_ringbuffer[l]) {
+					// could not allocate memory
+					int l2;
+
+					Pa_Terminate();
+					pa_active=0;
+					LOG_ERROR(("%s: PortAudio %s failed: could not allocate memory for ringbuffer %d for input",__FUNCTION__,AudioDevice,l));
+					Ret = ERR_MALLOC;
+
+					// free all earlier allocated memory
+					for (l2=0; l2 < (l-1); l2++) {
+						free(pa.i_ringbuffer[l2]);
+					}; // end for
+
+					// mark input ringbuffer as invalid
+					pa.i_ringbuffer_c=-1;
+
+					break;
+				}; // end if
+
+				// clear ringbuffer
+				memset(pa.i_ringbuffer[l],0,numBytes);
+				
+			}; // end for
+
+			// init pointers
+			pa.i_ringbuffer_c=0; // consumer
+			pa.i_ringbuffer_p=1; // producer
+
+			// init vars for tempory buffer for input
+			i_tmpbuffer_c=-1; // -1: no data in tmpbuffer and next frame not yet retrieved
+			i_framesize=numBytes;
+
+
+			// OUTPUT
+			if (SampleRate == 8000) {
+				// 20 ms @ 8000
+				numBytes = PA_BUFFERSAMPL8 * sizeof(int16_t);
+			} else {
+				// 20 ms @ 48000
+				numBytes = PA_BUFFERSAMPL48 * sizeof(int16_t);
+			}; // end else - if
+
+			// double size if stereo
+			if (!outputParameters.channelCount == 2) {
+				numBytes = AUDIO_BUF_SIZE_BYTES << 1; // stereo
+			}; // end if
+
+			for (l=0; l < PA_NUMBUFF; l++) {
+				pa.o_ringbuffer[l]=(int16_t*)malloc(numBytes);
+
+				if (!pa.o_ringbuffer[l]) {
+					// could not allocate memory
+					int l2;
+
+					Pa_Terminate();
+					pa_active=0;
+					LOG_ERROR(("%s: PortAudio %s failed: could not allocate memory for ringbuffer %d for output",__FUNCTION__,AudioDevice,l));
+					Ret = ERR_MALLOC;
+
+					// free all earlier allocated memory
+					for (l2=0; l2 < PA_NUMBUFF; l2++) {
+						free(pa.i_ringbuffer[l2]);
+					}; // end for
+
+					for (l2=0; l2 < (l-1); l2++) {
+						free(pa.o_ringbuffer[l2]);
+					}; // end for
+
+					// mark input ringbuffer as invalid
+					pa.i_ringbuffer_c=-1;
+					pa.o_ringbuffer_c=-1;
+
+					// done, break out
+					break;
+				}; // end if
+
+				// clean ringbuffer
+				memset(pa.o_ringbuffer[l],0,numBytes);
+
+			}; // end for
+
+
+
+			pa.o_ringbuffer_c=0; // consumer
+			pa.o_ringbuffer_p=1; // producer
+
+
+			// init and create tempory buffer for pa_queueaudio; (twice size of normal framesize)
+			o_tmpbuffer_c=0;
+			o_framesize=numBytes;
+			o_tmpbuffer=(int16_t*)malloc(numBytes<<1);
+
+			if (!pa.o_ringbuffer[l]) {
+				// could not allocate memory
+				int l2;
+
+				Pa_Terminate();
+				pa_active=0;
+				LOG_ERROR(("%s: PortAudio %s failed: could not allocate memory for ringbuffer %d for output",__FUNCTION__,AudioDevice,l));
+				Ret = ERR_MALLOC;
+
+				// free all earlier allocated memory
+				for (l2=0; l2 < PA_NUMBUFF; l2++) {
+					free(pa.i_ringbuffer[l2]);
+				}; // end for
+
+				for (l2=0; l2 < PA_NUMBUFF; l2++) {
+					free(pa.o_ringbuffer[l2]);
+				}; // end for
+
+				// mark input ringbuffer as invalid
+				pa.i_ringbuffer_c=-1;
+				pa.o_ringbuffer_c=-1;
+				o_tmpbuffer_c=-1;
+
+				// done, break out
+				break;
+			}; // end if
+
+ 
+
+			// open stream
+			pa_ret = Pa_OpenStream (
+				&pastream,
+				&inputParameters,
+				&outputParameters,
+				(double)SampleRate,
+				AUDIO_BUF_SIZE, // number of audio-samples per buffer
+				paClipOff,	// We will not output out-of-range samples, so
+								// don't bother clipping them
+				funct_pacallback, // callback function
+				&pa
+			);
+
+			if (pa_ret != paNoError) {
+				// something went wrong
+				Pa_Terminate();
+				pa_active=0;
+				LOG_ERROR(("%s: PortAudio %s failed: error in Pa_OpenStream: %d (%s)\n",__FUNCTION__,AudioDevice,pa_ret, Pa_GetErrorText(pa_ret)));
+				Ret = ERR_AUDIO_DEV_OPEN;
+
+				// free memory of all ringbuffers
+				for (l2=0; l2 < PA_NUMBUFF; l2++) {
+					free(pa.i_ringbuffer[l2]);
+				}; // end for
+
+				for (l2=0; l2 < PA_NUMBUFF; l2++) {
+					free(pa.o_ringbuffer[l2]);
+				}; // end for
+
+				// mark input ringbuffer as invalid
+				pa.i_ringbuffer_c=-1;
+				pa.o_ringbuffer_c=-1;
+
+				// done, break out
+				break;
+
+			}; // end if (pa_openstream failed)
+
+			// start stream
+			pa_ret=Pa_StartStream(pastream);
+
+			if (pa_ret != paNoError) {
+				// something went wrong
+				Pa_Terminate();
+				pa_active=0;
+				LOG_ERROR(("%s: PortAudio %s failed: error in Pa_StartStream: %d (%s)\n",__FUNCTION__,AudioDevice,pa_ret, Pa_GetErrorText(pa_ret)));
+				Ret = ERR_AUDIO_DEV_OPEN;
+
+				// free memory of all ringbuffers
+				for (l2=0; l2 < PA_NUMBUFF; l2++) {
+					free(pa.i_ringbuffer[l2]);
+				}; // end for
+
+				for (l2=0; l2 < PA_NUMBUFF; l2++) {
+					free(pa.o_ringbuffer[l2]);
+				}; // end for
+
+				// mark input ringbuffer as invalid
+				pa.i_ringbuffer_c=-1;
+				pa.o_ringbuffer_c=-1;
+				o_tmpbuffer_c=-1;
+
+				// done, break out
+				break;
+
+			}; // end if
+			
+
+#endif
+		}; // end switch/case AudiodeviceType 
    } while(FALSE);
 
    return Ret;
@@ -2388,25 +3452,13 @@ int CPort::EndPointInit()
        5 - USB Audio dongle GPIO
        6 - PCF8754 I2C expander on iMic
 
-// ON1ARF
-		7 - /sys/class/gpio/gpioXX/... GPIO writing
-
+		7 - /sys/class/gpio GPIO switching
    */
       if(TxKeyMethod < 0 || TxKeyMethod > 7) {
          LOG_ERROR(("%s: TxKeyMethod %d is invalid\n",__FUNCTION__,TxKeyMethod));
          Ret = ERR_CONFIG_FILE;
          break;
-      };
-
-
-		// ON1ARF
-		// GpioSysClassId should be set (i.e. != -1) for TxKeyMethod 7
-		if ((TxKeyMethod == 7) && (GpioSysClassId < 0)) {
-         LOG_ERROR(("%s: GpioSysClassId not set for TxKeyMethod 7\n",__FUNCTION__));
-         Ret = ERR_CONFIG_FILE;
-         break;
-		}; // end if
-
+      }
 
       /*
       RxCosMethod:

@@ -19,9 +19,6 @@
    http://CQiNet.sourceforge.net
 
    $Log: configvars.cpp,v $
-   Revision 1.40  2013/05/13 16:41:06  beta2k
-   Added patches from Kristoff - ON1ARF for sysfs GPIO access for PTT
-
    Revision 1.39  2012/12/09 16:27:41  wb6ymh
    1. Removed old chan_rptdir style Asterisk support variables AsteriskIP,
    AsteriskBind2IP, AsteriskDesc, AsteriskPort, and AsteriskEnable.
@@ -658,9 +655,12 @@ struct config_entry ConfigVars[] = {
 
    { "SerialDevName", "%s", CLASS_VAR(DevName, 0)},
    { "DevName", "%s", CLASS_VAR(DevName,0)},
+// ON1ARF
    { "VoxThreshold", "%d", CLASS_VAR(VoxThreshold,0)},
    { "VoxHoldTime", "%d", CLASS_VAR(VoxHoldTime,0)},
    { "VoxTripDelay", "%d", CLASS_VAR(VoxTripDelay,0)},
+// ON1ARF
+   { "VoxThresholdKickin", "%d", CLASS_VAR(VoxThresholdKickin,0)},
    { "TxKeyMethod", "%d", CLASS_VAR(TxKeyMethod,CON_FLG_REQUIRED)},
 // ON1ARF
    { "GpioSysClassId", "%d", CLASS_VAR(GpioSysClassId,0)},
@@ -692,6 +692,12 @@ struct config_entry ConfigVars[] = {
    { "MuteDTMF", "%d", CLASS_VAR(MuteDTMF,0)},
    { "DTMFCommandTimeout", "%d", CLASS_VAR(DTMFCommandTimeout,0)},
    { "AudioDevice", "%s", CLASS_VAR(AudioDevice,CON_FLG_REQUIRED)},
+// ON1ARF
+   { "AudioDevice2", "%s", CLASS_VAR(AudioDevice2,0)},
+// ON1ARF
+   { "AudioDeviceType", "%d", CLASS_VAR(AudioDeviceType,0)},
+// ON1ARF
+   { "AudioOutMuted", "%d", CLASS_VAR(AudioOutMuted,0)},
    { "Monitor", "%d", CLASS_VAR(bMonitor,0)},
    { "COS_KeyCode", "%d", CLASS_VAR(COS_KeyCode,0)},
    { "AudioDongleSN", "%s", CLASS_VAR(AudioDongleSN,0)},
@@ -1218,6 +1224,7 @@ int CreatePort(struct config_entry *pConf, char *Arg, AfCmd Cmd, int x)
    CPort *pPort;
    char *cp;
    struct config_entry *p;
+fprintf(stderr,"CreatePort = %s, x = %d \n",Arg,x);
 
    if(Cmd == AF_SET_VAR ) do {
       if((cp = strchr(Arg,' ')) != NULL) {
@@ -1255,12 +1262,38 @@ int CreatePort(struct config_entry *pConf, char *Arg, AfCmd Cmd, int x)
             break;
          }
 
+pPort=NULL;
+fprintf(stderr,"p_pPort = %X \n",pPort);
          if((pPort = new CPort) == NULL) {
             LOG_ERROR(("%s#%d: new failed.\n",__FUNCTION__,__LINE__));
             Ret = ERR_CONFIG_FILE;
             break;
          }
-         pPort->NodeName = strdup(Arg);
+sleep (3);
+fprintf(stderr,"before: Arg = *%s* \n",Arg);
+fprintf(stderr,"p_pPort = %X \n",pPort);
+fprintf(stderr,"addr pPort->NodeName = %X \n",&pPort->NodeName);
+sleep (3);
+	char * zzz;
+
+//			zzz = strdup(Arg);
+
+fprintf(stderr,"zzz  = %X \n",zzz);
+zzz=NULL;
+fprintf(stderr,"zzz = %X,  strlen(arg)  = %d \n",zzz,strlen(Arg));
+zzz = (char *)malloc(strlen(Arg)+1);
+fprintf(stderr,"zzz  = %X \n",zzz);
+if (zzz) {
+fprintf(stderr,"if zzz  = %s \n",zzz);
+	strcpy(zzz,Arg);
+}; // end if
+fprintf(stderr,"zzz  = %s \n",zzz);
+
+         pPort->NodeName = zzz;
+//         pPort->NodeName = strdup(Arg);
+fprintf(stderr,"addr pPort->NodeName = %X \n",&pPort->NodeName);
+fprintf(stderr,"After: Arg = %s \n",Arg);
+
          CurrentNode = pPort;
          avl_insert(NodeTree,pPort);
       }

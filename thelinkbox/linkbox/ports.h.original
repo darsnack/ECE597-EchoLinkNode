@@ -19,8 +19,23 @@
    http://CQiNet.sourceforge.net
 
    $Log: ports.h,v $
-   Revision 1.27  2013/05/13 16:41:06  beta2k
-   Added patches from Kristoff - ON1ARF for sysfs GPIO access for PTT
+
+	// 2013/11/14 ON1ARF
+	Add support for portaudio
+
+	// 2013/11/11 ON1ARF
+	Replaced AudioDeviceIsFifo by AudioDeviceType
+	add AudioDevice2: 2nd AudioDevice for output for FIFO device
+	Add AudioOutMuted
+
+	// 2013/10/20 ON1ARF
+	Added option VoxThresholdKickin: A "kicking" value to increase the VoxThreshold at
+	the beginning of a stream
+
+	// 2013/10/10 ON1ARF
+   Added option "AudiodeviceIsFifo": read-only audio device, reads raw stream from file
+			(or FIFO-device), no DSP_SND commands
+
 
    Revision 1.26  2010/11/20 15:16:33  wb6ymh
    Added SetTxPower, Write8754 prototypes.
@@ -157,6 +172,26 @@
 #define MAX_PORTS 32
 
 
+// ON1ARF
+#ifdef __NEEDPORTAUDIO__
+struct pashared_str {
+	// ringbuffers + pointers in ringbuffers
+	int16_t *i_ringbuffer[PA_NUMBUFF], *o_ringbuffer[PA_NUMBUFF];
+	int i_ringbuffer_c;
+	int i_ringbuffer_p;
+	int o_ringbuffer_c;
+	int o_ringbuffer_p;
+			// i_ o_ : input or output
+			// _c _p : consumer or producer
+
+	int i_numchannel, o_numchannel; // mono or stereo?
+	int p_state; // 0 = waiting, 1 = playback
+	int c_bufferfull; // flags
+
+};
+#endif
+
+
 class CPort : public Node
 {
 public:
@@ -188,6 +223,13 @@ public:
    void SendGenericData(unsigned char *Data,int Len);
    void CmdSendAx25Beacon(ClientBufPrint *p);
    void SendCwId();
+
+// ON1ARF
+#ifdef __NEEDPORTAUDIODEBUG__
+	portaudio queue audio
+	int pa_queueaudio(char  * AudioBuffer, int BytesToSend);
+	int pa_getaudio(char * AudioBuffer, int BytesToRead);
+#endif
 
 // Public variables
 
@@ -254,6 +296,10 @@ public:
    int EnableDtmfCtcssFilter;
    int NoHangtimeOnID;
    int NoAudioInLooping;
+// ON1ARF
+	int AudioDeviceType;
+	int AudioOutMuted;
+	int VoxThresholdKickin;
 
    float RxFrequency;
    float TxTone;
@@ -271,6 +317,29 @@ public:
    char *CWId;
    char *VoiceID;
    char *AudioDevice;
+// ON1ARF
+   char *AudioDevice2;
+
+// ON1ARF
+#ifdef __NEEDPORTAUDIO__
+	PaStreamParameters outputParameters;
+	PaStreamParameters inputParameters;
+
+	pashared_str pa; // data shared between object and portaudio callback function
+
+	// is PortAudio initialised?
+	int pa_active;
+
+	// tempory buffer for pa_getaudio
+	int i_tmpbuffer_c;
+	int i_framesize;
+
+	// tempory buffer for pa_queueaudio
+	int16_t *o_tmpbuffer;
+	int o_tmpbuffer_c;
+	int o_framesize;
+#endif
+
    char *AudioDongleSN;
    char *AudioDongleAdr;
    char *Ax25BeaconText;
@@ -384,14 +453,15 @@ private:
    void checkCTCSS(void);
    void Write8754(char Data);
 
-// ON1ARF
-// gpiosc = GPIO /sys/class/gpio methode of accessing GPIO pins
+	// Added ON1ARF
+	// gpiosc = GPIO /sys/class/gpio methode of accessing GPIO pins
+	// DeviceIsFido = Device is FIFO device, read raw PCM, no SND_DSP functions, readonly (no write)
 
 // Use the /sys/class/gpio kernel-drivers to do GPIO operations.
 // The application assumes that the kernel-driver filestructure has
 // been correctly initialised and preconfigured
 
-// E.g. on a raspberry pi, the initialion to write data to GPIO pin 17
+// E.g. on a raspberry pi, the initialion to read data from GPIO pin 17
 // (i.e. the 11th (!!!) pin of the GPIO pins of the RPi) requires root
 // priviledges and can be does as follows:
 
@@ -415,8 +485,6 @@ private:
 	int gpiosc_init;
 	char gpiosc_fname[40];
 	int gpiosc_fd;
-
-
 };
 
 extern Node *CurrentNode;
