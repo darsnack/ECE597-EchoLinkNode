@@ -38,7 +38,7 @@
 /* #undef HAVE_LIBSOCKET */
 
 /* Define to 1 if you have the `usb' library (-lusb). */
-/* #undef HAVE_LIBUSB */
+#define HAVE_LIBUSB 1
 
 /* Define to 1 if you have the <limits.h> header file. */
 #define HAVE_LIMITS_H 1
@@ -95,7 +95,7 @@
 /* #undef HAVE_UNSIGNED_BITTYPES */
 
 /* Set to a text string describing your operating system and hardware */
-#define OUR_HOST "i686-pc-linux-gnu"
+#define OUR_HOST "armv7l-unknown-linux-gnu"
 
 /* Name of package */
 #define PACKAGE "thelinkbox"

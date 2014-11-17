@@ -16,10 +16,6 @@
 
 
 # $Log: Makefile.am,v $
-
-# ON1ARF
-# 2013/11/14: add support for portaudio, link to -lportaudio
-
 # Revision 1.11  2010/01/14 19:34:53  wb6ymh
 # Added libhrprof to link when profiling.
 #
@@ -77,13 +73,13 @@ POST_INSTALL = :
 NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
-build_triplet = armv5tel-unknown-linux-gnu
-host_triplet = armv5tel-unknown-linux-gnu
+build_triplet = armv7l-unknown-linux-gnu
+host_triplet = armv7l-unknown-linux-gnu
 libexec_PROGRAMS = tlb$(EXEEXT)
 #am__append_1 = $(top_builddir)/hrprof/libhrprof.a
-#am__append_2 = usbdev.cpp
-#am__append_3 = -lusb
-#am__append_4 = -DUSB_SUPPORT 
+am__append_2 = usbdev.cpp
+am__append_3 = -lusb
+am__append_4 = -DUSB_SUPPORT 
 #am__append_5 = -DUSE_DMALLOC
 #am__append_6 = -DUSE_DMALLOC
 subdir = linkbox
@@ -103,7 +99,7 @@ am__tlb_SOURCES_DIST = ports.cpp ctcss.c ctcss.h devinput.cpp \
 	ToneGen.cpp voip.cpp voip.h nodes.h nodes.cpp linkbox.h \
 	filters.cpp filters.h Ctext.cpp Ctext.h radio_ctrl.h dh.cpp \
 	ulaw2linear.h ulaw.c devices.h devices.cpp usbdev.cpp
-#am__objects_1 = usbdev.$(OBJEXT)
+am__objects_1 = usbdev.$(OBJEXT)
 am_tlb_OBJECTS = ports.$(OBJEXT) ctcss.$(OBJEXT) devinput.$(OBJEXT) \
 	configvars.$(OBJEXT) ToneGen.$(OBJEXT) voip.$(OBJEXT) \
 	nodes.$(OBJEXT) filters.$(OBJEXT) Ctext.$(OBJEXT) dh.$(OBJEXT) \
@@ -137,32 +133,29 @@ DIST_SOURCES = $(am__tlb_SOURCES_DIST)
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
-ACLOCAL = ${SHELL} /home/kristoff/thelinkbox-0.53-fifo/config/missing --run aclocal-1.11
-AMTAR = ${SHELL} /home/kristoff/thelinkbox-0.53-fifo/config/missing --run tar
-AUTOCONF = ${SHELL} /home/kristoff/thelinkbox-0.53-fifo/config/missing --run autoconf
-AUTOHEADER = ${SHELL} /home/kristoff/thelinkbox-0.53-fifo/config/missing --run autoheader
-AUTOMAKE = ${SHELL} /home/kristoff/thelinkbox-0.53-fifo/config/missing --run automake-1.11
-AWK = gawk
+ACLOCAL = ${SHELL} /root/ECE597-EchoLinkNode/thelinkbox/config/missing --run aclocal-1.11
+AMTAR = ${SHELL} /root/ECE597-EchoLinkNode/thelinkbox/config/missing --run tar
+AUTOCONF = ${SHELL} /root/ECE597-EchoLinkNode/thelinkbox/config/missing --run autoconf
+AUTOHEADER = ${SHELL} /root/ECE597-EchoLinkNode/thelinkbox/config/missing --run autoheader
+AUTOMAKE = ${SHELL} /root/ECE597-EchoLinkNode/thelinkbox/config/missing --run automake-1.11
+AWK = mawk
 CC = gcc
 CCDEPMODE = depmode=gcc3
-#CFLAGS = -g -O2 -Wall
-CFLAGS = -g -Wall
+CFLAGS = -g -O2
 CPP = gcc -E
 CPPFLAGS = 
 CXX = g++
 CXXDEPMODE = depmode=gcc3
-#CXXFLAGS = -g -O2 -Wall
-CXXFLAGS = -g -Wall
+CXXFLAGS = -g -O2
 CYGPATH_W = echo
-# ON1ARF: add portaudio
-DEFS = -DHAVE_CONFIG_H -D__PORTAUDIO__
+DEFS = -DHAVE_CONFIG_H
 DEPDIR = .deps
 ECHO_C = 
 ECHO_N = -n
 ECHO_T = 
-EGREP = /usr/bin/grep -E
+EGREP = /bin/grep -E
 EXEEXT = 
-GREP = /usr/bin/grep
+GREP = /bin/grep
 HAVE_EVIOCGUNIQ = 1
 HAVE_SIGNED_BITTYPES = 0
 HAVE_UNSIGNED_BITTYPES = 0
@@ -175,11 +168,11 @@ LDFLAGS =
 LIBDMALLOC = 
 LIBOBJS = 
 LIBREADLINE = 
-LIBS = 
+LIBS = -lusb 
 LN_S = ln -s
 LTLIBOBJS = 
-MAKEINFO = ${SHELL} /home/kristoff/thelinkbox-0.53-fifo/config/missing --run makeinfo
-MKDIR_P = /usr/bin/mkdir -p
+MAKEINFO = ${SHELL} /root/ECE597-EchoLinkNode/thelinkbox/config/missing --run makeinfo
+MKDIR_P = /bin/mkdir -p
 OBJEXT = o
 PACKAGE = thelinkbox
 PACKAGE_BUGREPORT = 
@@ -191,13 +184,13 @@ PACKAGE_VERSION =
 PATH_SEPARATOR = :
 RANLIB = ranlib
 SET_MAKE = 
-SHELL = /bin/sh
+SHELL = /bin/bash
 STRIP = 
 VERSION = 0.53
-abs_builddir = /home/kristoff/thelinkbox-0.53-fifo/linkbox
-abs_srcdir = /home/kristoff/thelinkbox-0.53-fifo/linkbox
-abs_top_builddir = /home/kristoff/thelinkbox-0.53-fifo
-abs_top_srcdir = /home/kristoff/thelinkbox-0.53-fifo
+abs_builddir = /root/ECE597-EchoLinkNode/thelinkbox/linkbox
+abs_srcdir = /root/ECE597-EchoLinkNode/thelinkbox/linkbox
+abs_top_builddir = /root/ECE597-EchoLinkNode/thelinkbox
+abs_top_srcdir = /root/ECE597-EchoLinkNode/thelinkbox
 ac_ct_CC = gcc
 ac_ct_CXX = g++
 am__include = include
@@ -206,9 +199,9 @@ am__quote =
 am__tar = ${AMTAR} chof - "$$tardir"
 am__untar = ${AMTAR} xf -
 bindir = ${exec_prefix}/bin
-build = armv5tel-unknown-linux-gnu
+build = armv7l-unknown-linux-gnu
 build_alias = 
-build_cpu = armv5tel
+build_cpu = armv7l
 build_os = linux-gnu
 build_vendor = unknown
 builddir = .
@@ -219,21 +212,21 @@ dvidir = ${docdir}
 exec_prefix = ${prefix}
 have_c = y
 have_cplus_plus = y
-host = armv5tel-unknown-linux-gnu
+host = armv7l-unknown-linux-gnu
 host_alias = 
-host_cpu = armv5tel
+host_cpu = armv7l
 host_os = linux-gnu
 host_vendor = unknown
 htmldir = ${docdir}
 includedir = ${prefix}/include
 infodir = ${datarootdir}/info
-install_sh = ${SHELL} /home/kristoff/thelinkbox-0.53-fifo/config/install-sh
+install_sh = ${SHELL} /root/ECE597-EchoLinkNode/thelinkbox/config/install-sh
 libdir = ${exec_prefix}/lib
 libexecdir = ${exec_prefix}/libexec
 localedir = ${datarootdir}/locale
 localstatedir = ${prefix}/var
 mandir = ${datarootdir}/man
-mkdir_p = /usr/bin/mkdir -p
+mkdir_p = /bin/mkdir -p
 oldincludedir = /usr/include
 pdfdir = ${docdir}
 prefix = /usr/local
@@ -252,7 +245,6 @@ tlb_SOURCES = ports.cpp ctcss.c ctcss.h devinput.cpp devinput.h \
 	voip.h nodes.h nodes.cpp linkbox.h filters.cpp filters.h \
 	Ctext.cpp Ctext.h radio_ctrl.h dh.cpp ulaw2linear.h ulaw.c \
 	devices.h devices.cpp $(am__append_2)
-#ON1ARF: add portaudio
 tlb_LDADD = $(top_builddir)/src/libtbd.a \
 	$(top_builddir)/common/libcommon.a \
 	$(top_builddir)/zlib/libzlib.a \
@@ -260,7 +252,7 @@ tlb_LDADD = $(top_builddir)/src/libtbd.a \
 	$(top_builddir)/spandsp/libspandsp.a \
 	$(top_builddir)/adpcm/libadpcm.a $(top_builddir)/src/libtbd.a \
 	$(LIBDMALLOC) $(top_builddir)/soundmodem/libsoundmodem.a \
-	$(am__append_1) -lm -lportaudio $(am__append_3)
+	$(am__append_1) -lm $(am__append_3)
 AM_CPPFLAGS = -I$(top_srcdir)/inc -I$(top_srcdir)/gsm/inc -DLINK_BOX \
 	-I$(top_srcdir)/zlib -I$(top_srcdir)/spandsp \
 	-I$(top_srcdir)/adpcm -I$(top_srcdir)/src \
