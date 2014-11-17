@@ -1,4 +1,6 @@
-# W9NAA EchoLink Node (Rose-Hulman Inst. of Tech. ECE597 Project)
+# W9NAA EchoLink Node
+## Rose-Hulman Inst. of Tech. ECE597 Project
+## In collaboration with Rose Tech Radio Club and Rose-Hulman Linux Users Group
 
 This repository will serve as the development location for my ECE597 project. The final product will be the EchoLink node for W9NAA, the school HAM radio club.
 
