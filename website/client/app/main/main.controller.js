@@ -3,10 +3,14 @@
 angular.module('w9naaEcholinkApp')
   .controller('MainCtrl', function ($scope, $http) {
   	$scope.members = {};
-  	$scope.nodeStatus = false;
+  	$scope.nodeStatus = "Offline";
 
     $scope.listMembers = function () {
     	console.log('angular');
+
+    	$http.get('/api/things/getNodeStatus').success(function (data) {
+    		$scope.nodeStatus = data.status ? 'Online' : 'Offline';
+    	});
 
     	$http.get('/api/things/listMembers').success(function (data) {
     		$scope.members = data.members;
@@ -23,7 +27,7 @@ angular.module('w9naaEcholinkApp')
 
     $scope.getNodeStatus = function () {
     	$http.get('/api/things/getNodeStatus').success(function (data) {
-    		$scope.nodeStatus = data.status;
+    		$scope.nodeStatus = data.status ? 'Online' : 'Offline';
     	})
     }
   });

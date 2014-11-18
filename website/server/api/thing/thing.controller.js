@@ -37,7 +37,7 @@ exports.startNode = function (req, res) {
 	console.log("Starting node...");
 
 	exec('ps aux | grep tl[b]', function (error, stdout, stderr) {
-		if (error) {
+		if (error && stdout !== '') {
 			console.log("Error getting status: " + error);
 		} else if (stdout === '') {
 			exec('/usr/local/libexec/tlb -f /root/ECE597-EchoLinkNode/tlb-configs/tlb.conf', function (error, stdout, stderr) {
@@ -71,7 +71,7 @@ exports.getNodeStatus = function (req, res) {
 	var data = {status: false};
 
 	exec('ps aux | grep tl[b]', function (error, stdout, stderr) {
-		if (error) {
+		if (error && stdout === '') {
 			console.log("Error getting status: " + error);
 		} else if (stdout !== '') {
 			data.status = true;
