@@ -31,6 +31,6 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     $scope.getNodeStatus = function () {
     	$http.get('/api/things/getNodeStatus').success(function (data) {
     		$scope.nodeStatus = data.status ? 'Online' : 'Offline';
-    	})
-    }
+    	});
+    };
 });
