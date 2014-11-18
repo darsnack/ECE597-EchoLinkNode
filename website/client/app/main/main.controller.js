@@ -1,7 +1,6 @@
 'use strict';
 
-angular.module('w9naaEcholinkApp')
-  .controller('MainCtrl', function ($scope, $http) {
+angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $http) {
   	$scope.members = {};
   	$scope.nodeStatus = "Offline";
 
@@ -30,4 +29,4 @@ angular.module('w9naaEcholinkApp')
     		$scope.nodeStatus = data.status ? 'Online' : 'Offline';
     	})
     }
-  });
+});
