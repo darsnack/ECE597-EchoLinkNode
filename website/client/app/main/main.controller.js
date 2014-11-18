@@ -24,9 +24,9 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     	});
 
     	if ($scope.nodeStatus === 'Online') {
-    		$(#banner).addClass('online-status');
+    		$(#banner).addClass('Online-status');
     	} else {
-    		$(#banner).addClass('offline-status');
+    		$(#banner).addClass('Offline-status');
     	}
     };
 
@@ -42,9 +42,9 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     	});
 
     	if ($scope.nodeStatus === 'Online') {
-    		$(#banner).addClass('online-status');
+    		$(#banner).addClass('Online-status');
     	} else {
-    		$(#banner).addClass('offline-status');
+    		$(#banner).addClass('Offline-status');
     	}
     };
 
@@ -58,9 +58,9 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     	});
 
     	if ($scope.nodeStatus === 'Online') {
-    		$(#banner).addClass('online-status');
+    		$(#banner).addClass('Online-status');
     	} else {
-    		$(#banner).addClass('offline-status');
+    		$(#banner).addClass('Offline-status');
     	}
     };
 });
