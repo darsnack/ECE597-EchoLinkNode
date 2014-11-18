@@ -9,11 +9,15 @@ header#banner.hero-unit
 .container
   .row
     .col-lg-12
-      h1.page-header Features:
-      ul.nav.nav-tabs.nav-stacked.col-md-4.col-lg-4.col-sm-6(ng-repeat='thing in awesomeThings')
-        li
-          a(href='#', tooltip='{{thing.info}}')
-            | {{thing.name}}
+      h1.page-header Commands:
+      ul
+        button(ng-click='listMembers()') List Members
+
+    .col-lg-12
+      h1.page-header Output:
+      ul
+        li(ng-repeat='member in members')
+          span {{member}}
 
 footer.footer
   .container

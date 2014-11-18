@@ -2,10 +2,13 @@
 
 angular.module('w9naaEcholinkApp')
   .controller('MainCtrl', function ($scope, $http) {
-    $scope.awesomeThings = [];
+  	$scope.members = {};
 
-    $http.get('/api/things').success(function(awesomeThings) {
-      $scope.awesomeThings = awesomeThings;
-    });
+    $scope.listMembers = function () {
+    	console.log('angular');
 
+    	$http.get('/api/things/listMembers').success(function (data) {
+    		$scope.members = data.members;
+    	});
+    };
   });
