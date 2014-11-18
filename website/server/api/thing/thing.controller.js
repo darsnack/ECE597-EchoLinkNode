@@ -71,7 +71,7 @@ exports.getNodeStatus = function (req, res) {
 	var data = {status: false};
 
 	exec('ps aux | grep tl[b]', function (error, stdout, stderr) {
-		if (error && stdout === '') {
+		if (error && stdout !== '') {
 			console.log("Error getting status: " + error);
 		} else if (stdout !== '') {
 			data.status = true;
