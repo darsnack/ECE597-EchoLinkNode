@@ -40,6 +40,18 @@ exports.startNode = function (req, res) {
 		if (error && stdout !== '') {
 			console.log("Error getting status: " + error);
 		} else if (stdout === '') {
+			exec('echo "48" > /sys/class/gpio/export', function (error) {
+				if (error) {
+					console.log("Error registering GPIO: " + error);
+				}
+			});
+
+			exec('echo "out" > /sys/class/gpio/gpio48/direction', function (error) {
+				if (error) {
+					console.log("Error registering GPIO: " + error);
+				}
+			});
+
 			exec('/usr/local/libexec/tlb -f /root/ECE597-EchoLinkNode/tlb-configs/tlb.conf', function (error, stdout, stderr) {
 				if (error) {
 					console.log("Error startig node: " + error);
