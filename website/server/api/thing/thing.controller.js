@@ -79,6 +79,4 @@ exports.getNodeStatus = function (req, res) {
 	});
 
 	res.json(data);
-
-	return data.status;
 };
