@@ -22,12 +22,6 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     			$scope.nodeStatus = "Offline";
     		}
     	});
-
-    	if ($scope.nodeStatus === 'Online') {
-    		$(#banner).addClass('Online-status');
-    	} else {
-    		$(#banner).addClass('Offline-status');
-    	}
     };
 
     $scope.stopNode = function () {
@@ -40,12 +34,6 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     			$scope.nodeStatus = "Offline";
     		}
     	});
-
-    	if ($scope.nodeStatus === 'Online') {
-    		$(#banner).addClass('Online-status');
-    	} else {
-    		$(#banner).addClass('Offline-status');
-    	}
     };
 
     $scope.getNodeStatus = function () {
@@ -56,11 +44,5 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     			$scope.nodeStatus = "Offline";
     		}
     	});
-
-    	if ($scope.nodeStatus === 'Online') {
-    		$(#banner).addClass('Online-status');
-    	} else {
-    		$(#banner).addClass('Offline-status');
-    	}
     };
 });
