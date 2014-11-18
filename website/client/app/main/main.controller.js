@@ -3,6 +3,8 @@
 angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $http) {
   	$scope.members = {};
   	$scope.nodeStatus = "Offline";
+  	$scope.startMessage = "";
+  	$scope.stopMessage = "";
 
     $scope.listMembers = function () {
     	console.log('angular');
@@ -22,6 +24,9 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     			$scope.nodeStatus = "Offline";
     		}
     	});
+
+    	$scope.startMessage = "Echolink node is running!";
+    	$scope.stopMessage = "";
     };
 
     $scope.stopNode = function () {
@@ -34,6 +39,9 @@ angular.module('w9naaEcholinkApp').controller('MainCtrl', function ($scope, $htt
     			$scope.nodeStatus = "Offline";
     		}
     	});
+
+    	$scope.startMessage = "";
+    	$scope.stopMessage = "Echolink has been shutdown :(";
     };
 
     $scope.getNodeStatus = function () {

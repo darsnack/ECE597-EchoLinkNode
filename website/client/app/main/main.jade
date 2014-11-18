@@ -20,7 +20,8 @@ header#banner.hero-unit
 
     .col-lg-6
       h1.page-header Output:
-      p(ng-repeat='stat in status') Current status: {{nodeStatus}}
+      //- p(ng-repeat='stat in status') Current status: {{nodeStatus}}
+      p {{startMessage}}{{stopMessage}}
       ul
         li(ng-repeat='member in members')
           span {{member}}
