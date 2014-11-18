@@ -36,15 +36,15 @@ exports.listMembers = function (req, res) {
 exports.startNode = function (req, res) {
 	console.log("Starting node...");
 
-	if (getNodeStatus()) {
-		res.statusCode = 200;
-		res.end();
-		return;
-	}
-
-	exec('/usr/local/libexec/tlb -f /root/ECE597-EchoLinkNode/tlb-configs/tlb.conf', function (error, stdout, stderr) {
+	exec('ps aux | grep tl[b]', function (error, stdout, stderr) {
 		if (error) {
-			console.log("Error startig node: " + error);
+			console.log("Error getting status: " + error);
+		} else if (stdout === '') {
+			exec('/usr/local/libexec/tlb -f /root/ECE597-EchoLinkNode/tlb-configs/tlb.conf', function (error, stdout, stderr) {
+				if (error) {
+					console.log("Error startig node: " + error);
+				}
+			});
 		}
 	});
 
