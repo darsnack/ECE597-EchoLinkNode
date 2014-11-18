@@ -1,22 +1,26 @@
-div(ng-include='"components/navbar/navbar.html"')
+//- div(ng-include='"components/navbar/navbar.html"')
 
 header#banner.hero-unit
   .container
-    h1 'Allo, 'Allo!
-    p.lead Kick-start your next web app with Angular Fullstack
-    img(src='assets/images/yeoman.png', alt='I\'m Yeoman')
+    h1 W9NAA Echolink Node
+    p.lead Talk to HAMs over the Internet!
+    //- img(src='assets/images/yeoman.png', alt='I\'m Yeoman')
 
 .container
   .row
-    .col-lg-12
+    .col-lg-6
       h1.page-header Commands:
       ul
-        button(ng-click='startNode()') Start Node
-        button(ng-click='stopNode()') Stop Node
-        button(ng-click='listMembers()') List Members
+        li 
+          button(ng-click='startNode()') Start Node
+        li
+          button(ng-click='stopNode()') Stop Node
+        li
+          button(ng-click='listMembers()') List Members
 
-    .col-lg-12
+    .col-lg-6
       h1.page-header Output:
+      p Current status: {{nodeStatus}}
       ul
         li(ng-repeat='member in members')
           span {{member}}
@@ -26,6 +30,6 @@ footer.footer
     p
       | Angular Fullstack v2.0.13
       = ' | '
-      a(href='https://twitter.com/tyhenkel') @tyhenkel
+      | Made by the Rose Tech Radio Club and Rose-Hulman Linux Users Group
       = ' | '
-      a(href='https://github.com/DaftMonk/generator-angular-fullstack/issues?state=open') Issues
+      a(href='https://github.com/darsnack/ECE597-EchoLinkNode') Source Code
